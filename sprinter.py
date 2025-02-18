@@ -9,6 +9,7 @@ import transformers
 import numpy as np
 import pandas as pd
 import time
+import json
 from utils import*
 from dataset import*
 
@@ -146,8 +147,9 @@ if __name__ == "__main__":
     target_name = 'EleutherAI/gpt-neo-1.3B'
     draft_name = 'EleutherAI/gpt-neo-125m'
     max_len = 20
-    
-    datasett = load_dataset(dataset_name, split_name)
+    sprinter_collection = []
+    json_file_name = 'sprinter.jsonl'
+    datasett = load_hugg_dataset(dataset_name, split_name)
     _, target, tokenizer, draft = load_models(device, target_name, draft_name)
     DRTmodel_sprinter = TokenAcceptanceModel(input_size=768, tokenizer=tokenizer).to(device)
     DRTmodel_sprinter.classifier.load_state_dict(torch.load(save_model_name))
@@ -196,7 +198,12 @@ if __name__ == "__main__":
             time_vec_SD+=time_SD
             dic = {'overall_time': [sum(single_sampling_time)], 'time_vec_SD': [time_vec_SD], 'avg_single_run_token':[sum(avg_token_list)/len(avg_token_list)],'avg_time':[sum(single_sampling_time)/len(single_sampling_time)], 'std_time':[np.std(single_sampling_time)]}
             pd.DataFrame(dic).to_csv('lm1b_neo_time_'+str(name)+'.csv', index=False)
+            if name == 'sprinter':
+                sprinter_collection.append({'prompt': prompt, 'res': tokenizer.decode(output[0],skip_special_tokens=True)[len(prompt):],'response':prompt +  tokenizer.decode(output[0],skip_special_tokens=True)[len(prompt):]})
             prompt_counter += 1
             if prompt_counter == stop_threhold:
                 break
 
+    
+    with open(json_file_name, 'w') as outfile:
+        json.dump(sprinter_collection, outfile, ensure_ascii=False)
