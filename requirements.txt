@@ -1,0 +1,12 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+tqdm
+absl-py
+rouge-score
+datasets==2.14.5
+evaluate
+nltk
+autopep8
+huggingface_hub[hf_transfer]
