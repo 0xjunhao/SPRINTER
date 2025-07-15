@@ -1,7 +1,12 @@
+from transformers.models.bloom.modeling_bloom import BloomForCausalLM
+from typing import Optional
 import torch
+import time
 from torch.nn import functional as F
 
 # copy from https://github.com/LeeSinLiang/microGPT/blob/ed40cf9780dbeb180adfe94c227d4aa97e69250e/gpt.py
+
+
 def top_k_top_p_filter(logits: torch.Tensor, top_k: int = 0, top_p: float = 0.0):
     """
 
@@ -28,7 +33,7 @@ def top_k_top_p_filter(logits: torch.Tensor, top_k: int = 0, top_p: float = 0.0)
     return logits
 
 
-def norm_logits(logits : torch.Tensor, temperature : float, top_k : float, top_p : float) -> torch.Tensor:
+def norm_logits(logits: torch.Tensor, temperature: float, top_k: float, top_p: float) -> torch.Tensor:
     """
 
     Args:
@@ -47,7 +52,7 @@ def norm_logits(logits : torch.Tensor, temperature : float, top_k : float, top_p
     return probs
 
 
-def sample(probs : torch.Tensor, num_samples: int = 1):
+def sample(probs: torch.Tensor, num_samples: int = 1):
     idx_next = torch.multinomial(probs, num_samples=num_samples)
     if (idx_next.item() == 0):
         idx_next = torch.multinomial(probs, num_samples=num_samples)
@@ -63,22 +68,21 @@ def max_fn(x):
     x_max_sum = torch.sum(x_max, dim=1, keepdim=True)
     return x_max / x_max_sum
 
-import torch
-from typing import Optional
 
-###from sampling.utils import norm_logits, sample
-from transformers.models.bloom.modeling_bloom import BloomForCausalLM
+# from sampling.utils import norm_logits, sample
+
 
 def _debug_show_kvcache(past_key_values):
-    if  past_key_values is None:
+    if past_key_values is None:
         return
     for elem in past_key_values:
         k, v = elem
         print(f"kv cache: k shape {k.shape}, v shape {v.shape}")
         break
 
+
 class KVCacheModel():
-    def __init__(self, model : torch.nn.Module, temperature : float = 1, top_k : int = 0, top_p : float = 0) -> None:
+    def __init__(self, model: torch.nn.Module, temperature: float = 1, top_k: int = 0, top_p: float = 0) -> None:
         self._model = model
         self._past_key_values = None
         self._prob_history = None
@@ -87,18 +91,19 @@ class KVCacheModel():
         self._top_k = top_k
         self._top_p = top_p
 
-    def _forward_with_kvcache(self, input_ids : torch.Tensor, use_debug = True) -> torch.Tensor:
+    def _forward_with_kvcache(self, input_ids: torch.Tensor, use_debug=True) -> torch.Tensor:
         if self._past_key_values is None:
             assert self._prob_history is None, f"{self._prob_history.shape}"
             # the first forward (prefill) returns the prompt's logits
             start = time.time()
-            outputs = self._model(input_ids, output_hidden_states = True )
+            outputs = self._model(input_ids, output_hidden_states=True)
 
             model_time = time.time() - start
             self._prob_history = outputs.logits
             hidden_states = outputs.hidden_states
             for i in range(self._prob_history.shape[-2]):
-                self._prob_history[:, i, :] = norm_logits(self._prob_history[:, i, :], self._temperature, self._top_k, self._top_p)
+                self._prob_history[:, i, :] = norm_logits(
+                    self._prob_history[:, i, :], self._temperature, self._top_k, self._top_p)
             self._past_key_values = outputs.past_key_values
             last_q = self._prob_history[:, -1, :]
         else:
@@ -109,10 +114,11 @@ class KVCacheModel():
                 cached_len = k.shape[2]
             last_input_id = input_ids[:, cached_len:]
             if last_input_id.nelement() == 0:
-              # Return a dummy output or raise a more informative error
-              # For example:
-              # return torch.zeros_like(self._prob_history[:, -1, :]), 0, torch.zeros(768, device=input_ids.device) # Replace 768 with the actual hidden state size
-              raise ValueError("last_input_id is empty. This might be due to cached input overlapping completely with new input.")
+                # Return a dummy output or raise a more informative error
+                # For example:
+                # return torch.zeros_like(self._prob_history[:, -1, :]), 0, torch.zeros(768, device=input_ids.device) # Replace 768 with the actual hidden state size
+                raise ValueError(
+                    "last_input_id is empty. This might be due to cached input overlapping completely with new input.")
 
             if last_input_id.dim() == 1:
                 last_input_id = torch.unsqueeze(last_input_id, 0)
@@ -121,28 +127,30 @@ class KVCacheModel():
                 print(f"last_input_id shape {last_input_id.shape}")
                 _debug_show_kvcache(self._past_key_values)
             start = time.time()
-            outputs = self._model(last_input_id, past_key_values=self._past_key_values, use_cache=True, output_hidden_states = True )
+            outputs = self._model(
+                last_input_id, past_key_values=self._past_key_values, use_cache=True, output_hidden_states=True)
             hidden_states = outputs.hidden_states
-            model_time = time.time()- start
+            model_time = time.time() - start
 
             not_cached_q = outputs.logits
             if not_cached_q.dim() == 2:
                 not_cached_q = torch.unsqueeze(not_cached_q, 0)
 
             for i in range(not_cached_q.shape[-2]):
-                not_cached_q[:, i, :] = norm_logits(not_cached_q[:, i, :], self._temperature, self._top_k, self._top_p)
+                not_cached_q[:, i, :] = norm_logits(
+                    not_cached_q[:, i, :], self._temperature, self._top_k, self._top_p)
 
-            self._prob_history = torch.cat([self._prob_history, not_cached_q], dim=1)
+            self._prob_history = torch.cat(
+                [self._prob_history, not_cached_q], dim=1)
 
             last_q = not_cached_q[:, -1, :]
             self._past_key_values = outputs.past_key_values
 
-        return last_q, model_time, hidden_states[-1][0,-1]#[:, -1, :]
+        return last_q, model_time, hidden_states[-1][0, -1]  # [:, -1, :]
 
-
-    def _generate_with_kvcache(self, prefix : torch.Tensor,
-                                    gamma : int,
-                                    use_debug = False) -> torch.Tensor:
+    def _generate_with_kvcache(self, prefix: torch.Tensor,
+                               gamma: int,
+                               use_debug=False) -> torch.Tensor:
         """ forward the model gamma times
 
         Args:
@@ -155,7 +163,8 @@ class KVCacheModel():
         x = prefix
         total_model_gen = 0
         for _ in range(gamma):
-            q, model_time, hidden_states = self._forward_with_kvcache(x, use_debug)
+            q, model_time, hidden_states = self._forward_with_kvcache(
+                x, use_debug)
             start_time = time.time()
             next_tok = sample(q)
             resample_time = time.time() - start_time
@@ -164,12 +173,12 @@ class KVCacheModel():
         return x, total_model_gen, hidden_states
 
     @torch.no_grad()
-    def generate(self, input : torch.Tensor, gamma : int) -> torch.Tensor:
+    def generate(self, input: torch.Tensor, gamma: int) -> torch.Tensor:
         output = self._generate_with_kvcache(input, gamma)
         return output
 
     @torch.no_grad()
-    def rollback(self, end_pos : int):
+    def rollback(self, end_pos: int):
         past_key_values_trimmed = []
         assert self._past_key_values
         for kv in self._past_key_values:
