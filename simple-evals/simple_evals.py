@@ -23,6 +23,7 @@ from .mmlu_eval import MMLUEval
 # from .sampler.claude_sampler import ClaudeCompletionSampler, CLAUDE_SYSTEM_MESSAGE_LMSYS
 # from .sampler.o_chat_completion_sampler import OChatCompletionSampler
 # from .sampler.responses_sampler import ResponsesSampler
+from .sampler.transformer_sampler import TransformerSampler
 from .simpleqa_eval import SimpleQAEval
 
 
@@ -63,6 +64,9 @@ def main():
     args = parser.parse_args()
 
     models = {
+        "EleutherAI/gpt-neo-1.3B": TransformerSampler(
+            model_name="EleutherAI/gpt-neo-1.3B",
+        )
         # # Reasoning Models
         # "o3": ResponsesSampler(
         #     model="o3-2025-04-16",
