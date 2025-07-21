@@ -183,6 +183,8 @@ def rejection_sample(
             cu_num_draft_tokens,
             draft_token_ids,
             target_argmax,
+            target_probs,
+            vocab_size,
             bonus_token_ids,
             is_greedy,
             max_spec_len,
@@ -214,6 +216,8 @@ def rejection_sample(
         sampling_metadata,
         device,
     )
+
+    logger.info("rejection_random_sample_kernel")
 
     # Rejection sampling for random sampling requests.
     rejection_random_sample_kernel[(batch_size, )](
@@ -437,6 +441,8 @@ def rejection_greedy_sample_kernel(
     cu_num_draft_tokens_ptr,  # [batch_size]
     draft_token_ids_ptr,  # [num_tokens]
     target_argmax_ptr,  # [num_tokens]
+    target_probs_ptr,
+    vocab_size,
     bonus_token_ids_ptr,  # [batch_size]
     is_greedy_ptr,  # [batch_size] or None
     max_spec_len,
@@ -464,13 +470,27 @@ def rejection_greedy_sample_kernel(
         if not rejected:
             draft_token_id = tl.load(draft_token_ids_ptr + start_idx + pos)
             target_argmax_id = tl.load(target_argmax_ptr + start_idx + pos)
+            draft_prob = tl.load(target_probs_ptr +
+                                  (start_idx + pos) * vocab_size +
+                                  draft_token_id)
+            target_prob = tl.load(target_probs_ptr +
+                                  (start_idx + pos) * vocab_size +
+                                  target_argmax_id)
             # tl.store(output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
             #         target_argmax_id)
-            tl.store(output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
-                    draft_token_id)
+            # tl.store(output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
+            #       draft_token_id)
             # if draft_token_id != target_argmax_id:
                 # Reject.
             #    rejected = True
+            if draft_token_id != target_argmax_id and draft_prob / target_prob < 0.5:
+                rejected = True
+                tl.store(output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
+                         target_argmax_id)
+            else:
+                tl.store(output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
+                         draft_token_id)
+
 
     if not rejected:
         # If all tokens are accepted, append the bonus token.

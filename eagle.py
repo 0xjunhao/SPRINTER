@@ -22,6 +22,8 @@ from vllm.v1.spec_decode.utils import prepare_eagle_input_kernel
 logger = init_logger(__name__)
 
 PADDING_SLOT_ID = -1
+SOFTMAX_K = 8
+DRAFT_THRESHOLD = 0.5
 
 
 class EagleProposer:
@@ -185,8 +187,9 @@ class EagleProposer:
         sample_hidden_states = last_hidden_states[last_token_indices]
         logits = self.model.compute_logits(sample_hidden_states, None)
         draft_token_ids = logits.argmax(dim=-1)
-        probs = F.softmax(logits, dim=-1)
-        draft_token_probs = probs[0, draft_token_ids]
+        top_k_logits, top_k_indices = torch.topk(logits, k=SOFTMAX_K, dim=-1)
+        top_k_probs = top_k_logits.softmax(dim=-1)
+        draft_token_probs = top_k_probs[:, 0]
         #logger.info("logits: %s", str(logits))
         #logger.info("probs: %s", str(probs))
         #logger.info("draft_token_probs: %s", str(draft_token_probs))
@@ -277,21 +280,26 @@ class EagleProposer:
             # TODO(wenlong): get more than one token for tree attention
             draft_token_ids = logits.argmax(dim=-1)
             draft_token_ids_list.append(draft_token_ids)
-            probs = F.softmax(logits, dim=-1)
-            draft_token_probs = probs[0, draft_token_ids]
-            # logger.info("logits: %s", str(logits))
-            # logger.info("probs: %s", str(probs))
-            # logger.info("draft_token_probs: %s", str(draft_token_probs))
+            top_k_logits, top_k_indices = torch.topk(logits, k=SOFTMAX_K, dim=-1)
+            top_k_probs = top_k_logits.softmax(dim=-1)
+            draft_token_probs = top_k_probs[:, 0]
+            #logger.info("logits: %s", str(logits))
+            #logger.info("probs: %s", str(top_k_probs))
+            #logger.info("draft_token_ids: %s", str(draft_token_ids))
+            #logger.info("draft_token_probs: %s", str(draft_token_probs))
             draft_token_probs_list.append(draft_token_probs)
 
         # [batch_size, num_speculative_tokens]
         draft_token_ids = torch.stack(draft_token_ids_list, dim=1)
         draft_token_probs = torch.stack(draft_token_probs_list, dim=1)
-        cum_draft_token_probs = torch.cumprod(draft_token_probs, dim=-1)
+        # cum_draft_token_probs = torch.cumprod(draft_token_probs, dim=-1)
         # logger.info("draft_token_ids: %s", str(draft_token_ids))
-        draft_token_ids = torch.where(cum_draft_token_probs <= 0.5, -1, draft_token_ids)
-        # logger.info("draft_token_ids: %s", str(draft_token_ids))
-        # logger.info("draft_token_probs: %s", str(draft_token_probs))
+        low_prob_mask = draft_token_probs < DRAFT_THRESHOLD
+        invalidation_mask = torch.cumsum(low_prob_mask, dim=1) > 0
+        draft_token_ids = torch.where(invalidation_mask, -1, draft_token_ids)
+        #draft_token_ids = torch.where(cum_draft_token_probs <= DRAFT_THRESHOLD, -1, draft_token_ids)
+        #logger.info("draft_token_ids: %s", str(draft_token_ids))
+        #logger.info("draft_token_probs: %s", str(draft_token_probs))
         # logger.info("cum_draft_token_probs: %s", str(cum_draft_token_probs))
         return draft_token_ids
 
